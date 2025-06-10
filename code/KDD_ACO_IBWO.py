@@ -107,8 +107,9 @@ def fitness_function(weight_vector, model, X_train, y_train, X_val, y_val,
     return fitness
 
 
-class ACOArchitectureSearch:
-    def __init__(self, X, y, n_input, n_output, hidden_range=(2, 10), n_ants=10, n_iterations=10):
+class MMACOArchitectureSearch:
+    def __init__(self, X, y, n_input, n_output, hidden_range=(2, 15), n_ants=10, n_iterations=10,
+                 pheromone_min=1.0, pheromone_max=9.0, evaporation_rate=0.1):
         self.X = X
         self.y = y
         self.n_input = n_input
@@ -116,18 +117,35 @@ class ACOArchitectureSearch:
         self.hidden_range = hidden_range
         self.n_ants = n_ants
         self.n_iterations = n_iterations
-        self.pheromone = np.ones(hidden_range[1] - hidden_range[0] + 1)
+        
+        # MMAS specific parameters
+        self.pheromone_min = pheromone_min
+        self.pheromone_max = pheromone_max
+        self.evaporation_rate = evaporation_rate
+        
+        # Initialize pheromone trails to max value
+        n_options = hidden_range[1] - hidden_range[0] + 1
+        self.pheromone = np.full(n_options, pheromone_max)
+        
+        # For storing best solution
+        self.best_hidden = None
+        self.best_fitness = float('inf')
+        self.best_iteration = 0
 
     def run(self):
-        best_hidden = None
-        best_fitness = float('inf')
-
         for iteration in range(self.n_iterations):
             hidden_choices = np.arange(self.hidden_range[0], self.hidden_range[1] + 1)
+            
+            # Selection probabilities with normalization
             probabilities = self.pheromone / self.pheromone.sum()
+            
+            # Initialization
             ants_hidden = np.random.choice(hidden_choices, size=self.n_ants, p=probabilities)
-
+            
             fitnesses = []
+            current_iteration_best_fitness = float('inf')
+            current_iteration_best_hidden = None
+            
             for hidden in ants_hidden:
                 model = SimpleANN(self.n_input, hidden, self.n_output)
                 dim = get_num_params(self.n_input, hidden, self.n_output)
@@ -135,21 +153,38 @@ class ACOArchitectureSearch:
                 X_subtrain, X_val, y_subtrain, y_val = train_test_split(self.X, self.y, test_size=0.2, random_state=42)
                 fitness = fitness_function(weights, model, X_subtrain, y_subtrain, X_val, y_val)
                 fitnesses.append(fitness)
+                
+                # Track iteration best
+                if fitness < current_iteration_best_fitness:
+                    current_iteration_best_fitness = fitness
+                    current_iteration_best_hidden = hidden
+                
+                # Track global best
+                if fitness < self.best_fitness:
+                    self.best_fitness = fitness
+                    self.best_hidden = hidden
+                    self.best_iteration = iteration
 
-                if fitness < best_fitness:
-                    best_fitness = fitness
-                    best_hidden = hidden
+            # Pheromone evaporation for all trails
+            self.pheromone *= (1 - self.evaporation_rate)
+            
+            # Apply pheromone bounds after evaporation
+            self.pheromone = np.clip(self.pheromone, self.pheromone_min, self.pheromone_max)
+            
+            # Update pheromone only for the best solution
+            if current_iteration_best_hidden is not None:
+                idx = current_iteration_best_hidden - self.hidden_range[0]
+                delta_pheromone = 1.0 / (1.0 + current_iteration_best_fitness)
+                self.pheromone[idx] += delta_pheromone
+            
+            # Apply pheromone bounds after update
+            self.pheromone = np.clip(self.pheromone, self.pheromone_min, self.pheromone_max)
+            
+            print(f"Iteration {iteration+1}/{self.n_iterations}, "
+                  f"Best Hidden layer: {self.best_hidden}, Best MSE: {self.best_fitness:.4f}")
 
-            # Update pheromone
-            for idx, hidden in enumerate(ants_hidden):
-                self.pheromone[hidden - self.hidden_range[0]] += 1.0 / (1.0 + fitnesses[idx])
+        return self.best_hidden
 
-            # Evaporation
-            self.pheromone *= 0.9
-
-            print(f"Iteration {iteration+1}/{self.n_iterations}, Best Hidden Neurons: {best_hidden}, Best MSE: {best_fitness:.4f}")
-
-        return best_hidden
 
 def levy_flight(beta=1.5, scale=0.3):
     sigma = (gamma(1 + beta) * np.sin(np.pi * beta / 2) /
@@ -169,9 +204,7 @@ class BWO:
         self.n = n_whales
         self.Tmax = Tmax
         self.bounds = bounds
-        self.stuck_counter = 0
         self.prev_best_fitness = float('inf')
-        self.stagnation_limit = 3
         # self.population = np.random.uniform(bounds[0], bounds[1], (self.n, dim))
         if initial_population is not None:
             self.population = initial_population.copy()
@@ -190,7 +223,7 @@ class BWO:
             C2 = 2 * Wf * self.n
 
             for i in range(self.n):
-                r = np.random.rand()
+                # r = np.random.rand()
                 if Bf > 0.5:  # Exploration
                     r1, r2 = np.random.rand(), np.random.rand()
                     j = np.random.randint(0, self.dim)
@@ -257,8 +290,8 @@ class ImprovedBWO:
     def optimize(self):
         for T in range(self.Tmax):
             B0 = np.random.rand()
-            # Bf = B0 * (1 - T / (2 * self.Tmax))
-            Bf = 0.8 * (1 - T / self.Tmax) + 0.2
+            Bf = B0 * (1 - T / (2 * self.Tmax))
+            # Bf = 0.8 * (1 - T / self.Tmax) + 0.2
             Wf = 0.1 - 0.05 * T / self.Tmax
             C2 = 2 * Wf * self.n
 
@@ -281,6 +314,7 @@ class ImprovedBWO:
                     f_i = self.fitness[i]
                     f_best = np.min(self.fitness)
                     f_worst = np.max(self.fitness)
+
                     # highest fitness is choosen for exploitation
                     # f_best = np.max(self.fitness)
                     # f_worst = np.min(self.fitness)
@@ -290,14 +324,17 @@ class ImprovedBWO:
                     else:
                         alpha_i = self.alpha_min + (self.alpha_max - self.alpha_min) * (
                             1 - (f_i - f_worst) / (f_best - f_worst))
-                        # Scale alpha_i so individuals with higher fitness get higher alpha_i
-                        # alpha_i = self.alpha_min + (self.alpha_max - self.alpha_min) * (
-                        #     (f_i - f_worst) / (f_best - f_worst))
+                        
+                    # Scale alpha_i so individuals with higher fitness get higher alpha_i
+                    # else:
+                    #     alpha_i = self.alpha_min + (self.alpha_max - self.alpha_min) * (
+                    #         (f_i - f_worst) / (f_best - f_worst))
 
                     # Pick random elite from top-K
                     elite = elites[np.random.randint(0, len(elites))]
+                    # alpha_i = 0.8
 
-                    # Beluga movement toward random elite using Levy
+                    # whales movement toward random elite using Levy
                     r3, r4 = np.random.rand(), np.random.rand()
                     LF = levy_flight(scale=0.3)
                     self.population[i] = (r3 * elite - r4 * self.population[i] +
@@ -339,90 +376,13 @@ class ImprovedBWO:
                     self.best = self.population[current_best_idx].copy()
                 
                 self.stuck_counter = 0  # reset counter
-                # print(f"Re-initialized {num_to_restart} whales due to stagnation.")
+                print(f"Re-initialized {num_to_restart} whales due to stagnation.")
 
             self.history.append(self.best_fitness)
             # if T % 10 == 0 or T == self.Tmax - 1:
-                # print(f"BWO Iter {T}: Best MSE = {self.best_fitness:.4f}")
+            #     print(f"BWO Iter {T}: Best MSE = {self.best_fitness:.4f}")
 
         return self.best, self.best_fitness
-
-# n_input = X_train.shape[1]
-# n_output = 1
-
-# # Step 1: ACO to get optimal number of hidden neurons
-# aco_search = ACOArchitectureSearch(X_train, y_train, n_input, n_output, hidden_range=(2, 10), n_ants=10, n_iterations=10)
-# best_hidden = aco_search.run()
-
-# # best_hidden = 10
-
-# # Step 2: Create model and get dimension
-# model = SimpleANN(n_input, best_hidden, n_output)
-# dim = get_num_params(n_input, best_hidden, n_output)
-
-# initial_pop = np.random.uniform(-1.5, 1.5, (100, dim))
-# X_subtrain, X_val, y_subtrain, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
-
-# # Step 3: Run BWO to optimize weights
-# bwo = BWO(model, X_subtrain, y_subtrain, dim, X_val=X_val, y_val=y_val,
-#           initial_population=initial_pop, n_whales=100, Tmax=1000)
-# best_weights_bwo, best_mse_bwo = bwo.optimize()
-
-# # Evaluate BWO result
-# model.set_weights(best_weights_bwo)
-# y_pred_test_bwo = model.forward(X_test)
-# y_class_test_bwo = (y_pred_test_bwo > 0.5).astype(int)
-# acc_bwo = np.mean(y_class_test_bwo.flatten() == y_test)
-
-# # Step 4: Run ImpovedBWO to optimize weights
-# bwo = ImprovedBWO(model, X_subtrain, y_subtrain, dim, X_val=X_val, y_val=y_val,
-#           initial_population=initial_pop, n_whales=100, Tmax=1000)
-# best_weights_improved_bwo, best_mse_improved_bwo = bwo.optimize()
-
-# model.set_weights(best_weights_improved_bwo)
-# y_pred_test_improved = model.forward(X_test)
-# y_class_test_improved = (y_pred_test_improved > 0.5).astype(int)
-# acc_improved = np.mean(y_class_test_improved.flatten() == y_test)
-
-# # Final Evaluation
-# methods = ['BWO', 'ImprovedBWO']
-# mse_values = [best_mse_bwo, best_mse_improved_bwo]
-# accuracy_values = [acc_bwo * 100, acc_improved * 100]  # in percentage
-
-# x = np.arange(len(methods))  # the label locations
-# width = 0.35  # width of the bars
-
-# fig, ax1 = plt.subplots()
-
-# # Plot MSE on left y-axis
-# rects1 = ax1.bar(x - width/2, mse_values, width, label='Best MSE', color='skyblue')
-# ax1.set_ylabel('Best MSE')
-# ax1.set_xticks(x)
-# ax1.set_xticklabels(methods)
-# ax1.set_title('Comparison of BWO and ImprovedBWO')
-
-# # Create another y-axis to plot accuracy
-# ax2 = ax1.twinx()
-# rects2 = ax2.bar(x + width/2, accuracy_values, width, label='Test Accuracy (%)', color='lightgreen')
-# ax2.set_ylabel('Test Accuracy (%)')
-
-# # Add legends
-# fig.legend(loc='upper right', bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
-
-# # Annotate bars with values
-# def autolabel(rects, ax, fmt="{:.2f}"):
-#     for rect in rects:
-#         height = rect.get_height()
-#         ax.annotate(fmt.format(height),
-#                     xy=(rect.get_x() + rect.get_width() / 2, height),
-#                     xytext=(0,3),
-#                     textcoords="offset points",
-#                     ha='center', va='bottom')
-
-# autolabel(rects1, ax1, "{:.6f}")
-# autolabel(rects2, ax2, "{:.2f}")
-
-# plt.show()
 
 runs = 30
 mse_bwo_list = []
@@ -435,25 +395,24 @@ for run in range(runs):
     n_input = X_train.shape[1]
     n_output = 1
 
-    # Step 1: ACO to get optimal number of hidden neurons
-    aco_search = ACOArchitectureSearch(X_train, y_train, n_input, n_output, hidden_range=(2, 10), n_ants=10, n_iterations=10)
+    # Step 1: ACO to get optimal number of hidden layers
+    aco_search = MMACOArchitectureSearch(X_train, y_train, n_input, n_output, hidden_range=(2, 15), n_ants=10, n_iterations=10)
     best_hidden = aco_search.run()
 
-    # best_hidden = 10
+    # best_hidden = 10 # for testing (comparing BWO and IBWO with fix hidden layers)
 
-    # Step 2: Create model and get dimension
+    # Step 2: create model and get dimension
     model = SimpleANN(n_input, best_hidden, n_output)
     dim = get_num_params(n_input, best_hidden, n_output)
 
     initial_pop = np.random.uniform(-1.5, 1.5, (100, dim))
     X_subtrain, X_val, y_subtrain, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
 
-    # Step 3: Run BWO to optimize weights
+    # Step 3: run BWO to optimize weights
     bwo = BWO(model, X_subtrain, y_subtrain, dim, X_val=X_val, y_val=y_val,
-              initial_population=initial_pop, n_whales=30, Tmax=100)
+              initial_population=initial_pop, n_whales=30, Tmax=200)
     best_weights_bwo, best_mse_bwo = bwo.optimize()
 
-    # Evaluate BWO result
     model.set_weights(best_weights_bwo)
     y_pred_test_bwo = model.forward(X_test)
     y_class_test_bwo = (y_pred_test_bwo > 0.5).astype(int)
@@ -462,9 +421,9 @@ for run in range(runs):
     mse_bwo_list.append(best_mse_bwo)
     acc_bwo_list.append(acc_bwo * 100)
 
-    # Step 4: Run ImpovedBWO to optimize weights
+    # Step 4: run ImpovedBWO to optimize weights
     bwo = ImprovedBWO(model, X_subtrain, y_subtrain, dim, X_val=X_val, y_val=y_val,
-              initial_population=initial_pop, n_whales=30, Tmax=100)
+              initial_population=initial_pop, n_whales=30, Tmax=200)
     best_weights_improved_bwo, best_mse_improved_bwo = bwo.optimize()
 
     model.set_weights(best_weights_improved_bwo)
