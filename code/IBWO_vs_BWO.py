@@ -18,7 +18,7 @@ def ackley(x):
     return -a * np.exp(-b * np.sqrt(sum_sq / n)) - np.exp(sum_cos / n) + a + np.exp(1)
 
 def fitness_function(x):
-    return ackley(x)
+    return sphere_function(x)
 
 def levy_flight(beta=1.5, scale=0.3):
     sigma = (gamma(1 + beta) * np.sin(np.pi * beta / 2) /
@@ -28,7 +28,7 @@ def levy_flight(beta=1.5, scale=0.3):
     return scale * u / abs(v) ** (1 / beta)
 
 class BWO:
-    def __init__(self, dim, initial_population=None, n_whales=30, Tmax=100, bounds=(-5, 5)):
+    def __init__(self, dim, initial_population=None, n_whales=30, Tmax=100, bounds=(-1, 1)):
         self.dim = dim
         self.n = n_whales
         self.Tmax = Tmax
