@@ -200,9 +200,9 @@ class ImprovedBWO:
         return self.best, self.best_fitness
 
 
-runs = 30
+runs = 10
 dim = 30
-Tmax = 100
+Tmax = 1000
 
 bwo_results = []
 ibwo_results = []
